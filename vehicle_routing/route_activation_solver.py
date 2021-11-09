@@ -3,6 +3,8 @@ import networkx as nx
 import matplotlib.pyplot as plt
 
 from itertools import product
+
+from qiskit_optimization.infinity import INFINITY
 from vehicle_routing import VehicleRouter
 from qiskit_optimization import QuadraticProgram
 
@@ -29,26 +31,65 @@ class RouteActivationSolver(VehicleRouter):
         edgelist = [(i, j) for i, j in product(range(self.n + 1), repeat=2) if i != j]
         self.variables = np.array([f'x.{i}.{j}' for i, j in edgelist])
 
-        # Add variables to quadratic program
+        # Add binary variables 'x' to quadratic program
         for var in self.variables:
             self.qp.binary_var(name=var)
+        
+        # Add binary variables 'y', MTZ integer variables 't' and integer variables 'w' to reduce quadratic constraints into linear
+        for i in range(1, self.n + 1):
+            for k in range(1, self.m + 1):
+                self.qp.binary_var(name=f'y.{i}.{k}')
+                self.qp.integer_var(name=f't.{i}.{k}', lowerbound=1, upperbound=self.n)
+                self.qp.integer_var(name=f'w.{i}.{k}', lowerbound=0, upperbound=self.n)
 
         # Add objective to quadratic program
         obj_linear = {self.variables[k]: self.cost[i, j] for k, (i, j) in enumerate(edgelist)}
         self.qp.minimize(linear=obj_linear)
 
-        # Add constraints - single delivery per client
+        # Add constraints - single delivery per client:
+        #  - Each client node must have exactly one edge directed towards it
+        #  - Each client node must have exactly one edge directed away from it
+        #  - Each client must be visited by exactly one vehicle
         for i in range(1, self.n + 1):
             constraint_linear_a = {f'x.{j}.{i}': 1 for j in range(self.n + 1) if j != i}
             constraint_linear_b = {f'x.{i}.{j}': 1 for j in range(self.n + 1) if j != i}
+            constraint_linear_c = {f'y.{i}.{k}': 1 for k in range(1, self.m + 1)}
             self.qp.linear_constraint(linear=constraint_linear_a, sense='==', rhs=1, name=f'single_delivery_a_{i}')
             self.qp.linear_constraint(linear=constraint_linear_b, sense='==', rhs=1, name=f'single_delivery_b_{i}')
+            self.qp.linear_constraint(linear=constraint_linear_c, sense='==', rhs=1, name=f'single_delivery_c_{i}')
 
         # Add constraints - m vehicles at depot
-        constraint_linear_a = {f'x.{0}.{k}': 1 for k in range(1, self.n + 1)}
-        constraint_linear_b = {f'x.{k}.{0}': 1 for k in range(1, self.n + 1)}
+        constraint_linear_a = {f'x.{0}.{i}': 1 for i in range(1, self.n + 1)}
+        constraint_linear_b = {f'x.{i}.{0}': 1 for i in range(1, self.n + 1)}
         self.qp.linear_constraint(linear=constraint_linear_a, sense='==', rhs=self.m, name=f'depot_a')
         self.qp.linear_constraint(linear=constraint_linear_b, sense='==', rhs=self.m, name=f'depot_b')
+
+        # Add constraints - eliminate subtours
+        for k in range(1, self.m + 1):
+            for e, (i, j) in enumerate(product(range(1, self.n + 1), repeat=2)):
+                if j != i:
+                    constraint_linear = {f'w.{i}.{k}': 1, f'w.{j}.{k}': -1, f'x.{i}.{j}': 2*self.n}
+                    self.qp.linear_constraint(linear=constraint_linear, sense='<=', rhs=2*self.n, name=f'eliminate_subtour_{i}_{j}_{k}')
+                    
+                    constraint_linear_l1_i = {f'w.{i}.{k}': 1, f'y.{i}.{k}': -1}
+                    self.qp.linear_constraint(linear=constraint_linear_l1_i, sense='>=', rhs=0, name=f'lower_bound_1_i_w_{i}_{k}_{e}')
+                    constraint_linear_l2_i = {f'w.{i}.{k}': 1, f't.{i}.{k}': -1, f'y.{i}.{k}': -self.n}
+                    self.qp.linear_constraint(linear=constraint_linear_l2_i, sense='>=', rhs=-self.n, name=f'lower_bound_2_i_w_{i}_{k}_{e}')
+                    
+                    constraint_linear_u1_i = {f'w.{i}.{k}': 1, f'y.{i}.{k}': -self.n}
+                    self.qp.linear_constraint(linear=constraint_linear_u1_i, sense='<=', rhs=0, name=f'upper_bound_1_i_w_{i}_{k}_{e}')
+                    constraint_linear_u2_i = {f'w.{i}.{k}': 1, f't.{i}.{k}': -1, f'y.{i}.{k}': -1}
+                    self.qp.linear_constraint(linear=constraint_linear_u2_i, sense='<=', rhs=-1, name=f'upper_bound_2_i_w_{i}_{k}_{e}')
+                    
+                    constraint_linear_l1_j = {f'w.{j}.{k}': 1, f'y.{j}.{k}': -1}
+                    self.qp.linear_constraint(linear=constraint_linear_l1_j, sense='>=', rhs=0, name=f'lower_bound_1_j_w_{j}_{k}_{e}')
+                    constraint_linear_l2_j = {f'w.{j}.{k}': 1, f't.{j}.{k}': -1, f'y.{j}.{k}': -self.n}
+                    self.qp.linear_constraint(linear=constraint_linear_l2_j, sense='>=', rhs=-self.n, name=f'lower_bound_2_j_w_{j}_{k}_{e}')
+
+                    constraint_linear_u1_j = {f'w.{j}.{k}': 1, f'y.{j}.{k}': -self.n}
+                    self.qp.linear_constraint(linear=constraint_linear_u1_j, sense='<=', rhs=0, name=f'upper_bound_1_j_w_{j}_{k}_{e}')
+                    constraint_linear_u2_j = {f'w.{j}.{k}': 1, f't.{j}.{k}': -1, f'y.{j}.{k}': -1}
+                    self.qp.linear_constraint(linear=constraint_linear_u2_j, sense='<=', rhs=-1, name=f'upper_bound_2_j_w_{j}_{k}_{e}')
 
     def visualize(self, xc=None, yc=None):
 

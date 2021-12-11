@@ -1,12 +1,13 @@
 import time
+from dwave_qbsolv.dimod_wrapper import QBSolv
 import hybrid
 import dwave.inspector
 
 from greedy import SteepestDescentSolver
-from dwave.system import LeapHybridSampler
-from dwave.system import DWaveSampler, EmbeddingComposite
+from dwave.system import LeapHybridSampler, DWaveSampler, EmbeddingComposite
+from neal import SimulatedAnnealingSampler
 from qiskit_optimization.algorithms import MinimumEigenOptimizer
-from qiskit.algorithms import QAOA
+from qiskit.algorithms import QAOA, NumPyMinimumEigensolver
 from qiskit import Aer
 
 
@@ -25,11 +26,16 @@ class SolverBackend:
         self.solvers = {'dwave': self.solve_dwave,
                         'leap': self.solve_leap,
                         'hybrid': self.solve_hybrid,
-                        'qaoa': self.solve_qaoa}
+                        'neal': self.solve_neal,
+                        'qbsolv': self.solve_qbsolv,
+                        'qaoa': self.solve_qaoa,
+                        'npme': self.solve_npme}
 
         # Initialize necessary variables
         self.dwave_result = None
         self.result_dict = None
+
+        self.solver_limit = 4
 
     def solve(self, solver, **params):
 
@@ -124,6 +130,43 @@ class SolverBackend:
         self.result_dict = self.vrp.result.first.sample
         self.vrp.extract_solution(self.result_dict)
 
+    def solve_neal(self, **params):
+
+        """Solve using Simulated Annealing Sampler.
+        Args:
+            params: Additional parameters that may be required by a solver. Not required here.
+        """
+
+        # Resolve parameters
+        params['solver'] = 'neal'
+
+        # Solve
+        sampler = SimulatedAnnealingSampler()
+        self.vrp.result = sampler.sample(self.vrp.bqm)
+
+        # Extract solution
+        self.vrp.timing.update(self.vrp.result.info)
+        self.result_dict = self.vrp.result.first.sample
+        self.vrp.extract_solution(self.result_dict)
+
+    def solve_qbsolv(self, **params):
+
+        """Solve using Simulated Annealing Sampler.
+        Args:
+            params: Additional parameters that may be required by a solver. Not required here.
+        """
+
+        # Resolve parameters
+        params['solver'] = 'qbsolv'
+
+        # Solve
+        self.vrp.result = QBSolv().sample(self.vrp.bqm, solver_limit=self.solver_limit)
+
+        # Extract solution
+        self.vrp.timing.update(self.vrp.result.info)
+        self.result_dict = self.vrp.result.first.sample
+        self.vrp.extract_solution(self.result_dict)
+
     def solve_qaoa(self, **params):
 
         """Solve using qiskit Minimum Eigen Optimizer based on a QAOA backend.
@@ -140,6 +183,30 @@ class SolverBackend:
         optimizer = MinimumEigenOptimizer(min_eigen_solver=solver)
         self.vrp.result = optimizer.solve(self.vrp.qp)
         self.vrp.timing['qaoa_solution_time'] = (time.time() - self.vrp.clock) * 1e6
+
+        # Build result dictionary
+        self.result_dict = {self.vrp.result.variable_names[i]: self.vrp.result.x[i]
+                            for i in range(len(self.vrp.result.variable_names))}
+
+        # Extract solution
+        self.vrp.extract_solution(self.result_dict)
+
+    def solve_npme(self, **params):
+
+        """Solve using qiskit Minimum Eigen Optimizer based on NumPyMinimumEigensolver().
+        Args:
+            params: Additional parameters that may be required by a solver. Not required here.
+        """
+
+        # Resolve parameters
+        params['solver'] = 'npme'
+        self.vrp.clock = time.time()
+
+        # Build optimizer and solve
+        solver = NumPyMinimumEigensolver()
+        optimizer = MinimumEigenOptimizer(min_eigen_solver=solver)
+        self.vrp.result = optimizer.solve(self.vrp.qp)
+        self.vrp.timing['npme_solution_time'] = (time.time() - self.vrp.clock) * 1e6
 
         # Build result dictionary
         self.result_dict = {self.vrp.result.variable_names[i]: self.vrp.result.x[i]

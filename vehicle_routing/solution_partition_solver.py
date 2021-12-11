@@ -4,6 +4,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 
 from itertools import product
+from matplotlib.colors import rgb2hex
 from collections import Counter
 from vehicle_routing import VehicleRouter
 from qiskit_optimization import QuadraticProgram
@@ -120,7 +121,8 @@ class SolutionPartitionSolver(VehicleRouter):
         plt.figure()
         ax = plt.gca()
         ax.set_title(f'Vehicle Routing Problem - {self.n} Clients & {self.m} Cars')
-
+        cmap = plt.cm.get_cmap('Accent')
+        
         # Build graph
         G = nx.MultiDiGraph()
         G.add_nodes_from(range(self.n + 1))
@@ -140,7 +142,7 @@ class SolutionPartitionSolver(VehicleRouter):
 
             # Plot edges
             G.add_edges_from(edgelist)
-            nx.draw_networkx_edges(G, pos=pos, edgelist=edgelist, width=2, edge_color='r')
+            nx.draw_networkx_edges(G, pos=pos, edgelist=edgelist, width=2, edge_color=rgb2hex(cmap(i)))
 
         # Show plot
         plt.grid(True)
